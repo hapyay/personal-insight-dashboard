@@ -192,7 +192,7 @@ API文档采用OpenAPI规范，可通过以下地址访问：
 
 ## 许可证
 
-MIT License
+Apache-2.0 license
 
 ## 贡献
 
@@ -204,3 +204,4 @@ MIT License
 
 - Email: 2655076437@qq.com
 - GitHub Issues: https://github.com/hapyay/personal-insight-dashboard/issues
+本次开发全程使用AI coding，我刚入门代码开发，如有问题欢迎指正。
