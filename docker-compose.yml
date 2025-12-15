@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    volumes:
+      - ./frontend/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    restart: unless-stopped
+
+  # 后端服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/chroma_db:/app/chroma_db
+      - ./backend/.env:/app/.env
+    environment:
+      - DATABASE_URL=sqlite:///./data/app.db
+      - CHROMA_DB_PATH=./chroma_db
+    restart: unless-stopped
+
+# 网络配置
+networks:
+  app-network:
+    driver: bridge
