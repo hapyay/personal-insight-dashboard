@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layout, Menu, theme, Form, Card, Input, Select, Button, message } from 'antd';
+import { Layout, Menu, theme, Form, Card, Input, Select, Button, message, Modal } from 'antd';
 import { 
   DashboardOutlined, 
   MessageOutlined, 
@@ -109,17 +109,20 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   } = theme.useToken();
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ height: '100vh' }}>
       <SiderMenu />
-      <Layout>
+      <Layout style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <Header style={{ padding: 0, background: colorBgContainer }} />
         <Content
           style={{
             margin: '24px 16px',
             padding: 24,
-            minHeight: 280,
             background: colorBgContainer,
             borderRadius: borderRadiusLG,
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            overflow: 'hidden'
           }}
         >
           {children}
@@ -145,6 +148,7 @@ const ChatPage: React.FC = () => {
     content: string;
     tool_calls?: any[]; // 工具调用信息
     timestamp?: number; // 消息时间戳
+    isTyping?: boolean; // 正在输入状态
   }
 
   // 聊天会话类型
@@ -161,6 +165,59 @@ const ChatPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
+  
+  // 用于删除确认弹窗的状态管理
+  const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [sessionIdToDelete, setSessionIdToDelete] = useState<string>('');
+  
+  // 聊天消息区域的ref，用于自动滚动到底部
+  const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  const messagesContainerRef = React.useRef<HTMLDivElement>(null);
+  
+  // 跟踪用户是否手动滚动了聊天记录
+  const [userScrolled, setUserScrolled] = React.useState(false);
+  // 跟踪是否需要显示滚动到底部按钮
+  const [showScrollButton, setShowScrollButton] = React.useState(false);
+  
+  // 自动滚动到最新消息
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+  
+  // 监听滚动事件，判断用户是否手动滚动
+  const handleScroll = () => {
+    if (messagesContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      // 计算当前滚动位置距离底部的距离
+      const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+      
+      // 如果距离底部超过50px，说明用户手动滚动了
+      if (distanceToBottom > 50) {
+        setUserScrolled(true);
+        setShowScrollButton(true);
+      } else {
+        setUserScrolled(false);
+        setShowScrollButton(false);
+      }
+    }
+  };
+  
+  // 当消息更新时，只有在用户没有手动滚动的情况下才自动滚动到底部
+  React.useEffect(() => {
+    if (!userScrolled) {
+      scrollToBottom();
+    } else {
+      // 如果用户手动滚动了，显示滚动到底部按钮
+      setShowScrollButton(true);
+    }
+  }, [messages, userScrolled]);
+  
+  // 手动滚动到底部的函数
+  const handleManualScrollToBottom = () => {
+    scrollToBottom();
+    setUserScrolled(false);
+    setShowScrollButton(false);
+  };
 
   // 初始化：从localStorage加载聊天会话
   React.useEffect(() => {
@@ -209,24 +266,45 @@ const ChatPage: React.FC = () => {
     }
   };
 
-  // 删除会话
-  const deleteSession = (sessionId: string) => {
-    const updatedSessions = sessions.filter(s => s.id !== sessionId);
-    setSessions(updatedSessions);
-    
-    // 如果删除的是当前活跃会话，激活第一个会话或创建新会话
-    if (sessionId === activeSessionId) {
-      if (updatedSessions.length > 0) {
-        const firstSession = updatedSessions[0];
-        setActiveSessionId(firstSession.id);
-        setMessages(firstSession.messages);
-      } else {
-        createNewSession();
+  // 显示删除确认弹窗
+  const showDeleteConfirm = (sessionId: string) => {
+    setSessionIdToDelete(sessionId);
+    setIsDeleteModalVisible(true);
+  };
+  
+  // 确认删除会话
+  const handleDeleteConfirm = () => {
+    if (sessionIdToDelete) {
+      // 执行删除逻辑
+      const updatedSessions = sessions.filter(s => s.id !== sessionIdToDelete);
+      
+      // 如果删除的是当前活跃会话
+      if (sessionIdToDelete === activeSessionId) {
+        if (updatedSessions.length > 0) {
+          const firstSession = updatedSessions[0];
+          setActiveSessionId(firstSession.id);
+          setMessages(firstSession.messages);
+        } else {
+          // 如果删除了最后一个会话，清空活跃会话和消息
+          setActiveSessionId('');
+          setMessages([]);
+        }
       }
+      
+      // 更新会话列表和localStorage
+      setSessions(updatedSessions);
+      localStorage.setItem('chatSessions', JSON.stringify(updatedSessions));
+      
+      // 关闭弹窗
+      setIsDeleteModalVisible(false);
+      setSessionIdToDelete('');
     }
-    
-    // 保存到localStorage
-    localStorage.setItem('chatSessions', JSON.stringify(updatedSessions));
+  };
+  
+  // 取消删除会话
+  const handleDeleteCancel = () => {
+    setIsDeleteModalVisible(false);
+    setSessionIdToDelete('');
   };
 
   // 更新会话标题
@@ -251,12 +329,20 @@ const ChatPage: React.FC = () => {
   const saveMessagesToSession = (updatedMessages: ChatMessage[]) => {
     const updatedSessions = sessions.map(s => {
       if (s.id === activeSessionId) {
-        // 更新会话标题（使用第一条用户消息）
+        // 更新会话标题（优先使用AI回复总结，其次使用用户第一条消息）
         let newTitle = s.title;
         if (newTitle === '新会话' && updatedMessages.length > 0) {
-          const firstUserMessage = updatedMessages.find(m => m.role === 'user');
-          if (firstUserMessage) {
-            newTitle = firstUserMessage.content.substring(0, 20) + (firstUserMessage.content.length > 20 ? '...' : '');
+          // 查找是否有AI回复
+          const aiMessage = updatedMessages.find(m => m.role === 'assistant' && m.content);
+          if (aiMessage && aiMessage.content) {
+            // 使用AI回复的前20个字符作为标题（AI的回复通常更能概括会话主题）
+            newTitle = aiMessage.content.substring(0, 20) + (aiMessage.content.length > 20 ? '...' : '');
+          } else {
+            // 如果没有AI回复，使用第一条用户消息
+            const firstUserMessage = updatedMessages.find(m => m.role === 'user');
+            if (firstUserMessage) {
+              newTitle = firstUserMessage.content.substring(0, 20) + (firstUserMessage.content.length > 20 ? '...' : '');
+            }
           }
         }
         
@@ -356,7 +442,8 @@ const ChatPage: React.FC = () => {
         }
       }
       
-      const response = await fetch('http://localhost:8000/api/agent/chat', {
+      // 使用流式请求获取AI响应
+      const response = await fetch('http://localhost:8000/api/agent/chat/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -370,15 +457,82 @@ const ChatPage: React.FC = () => {
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        // 添加时间戳到AI响应
-        const aiMessageWithTimestamp = data.chat_history.map((msg: any) => ({
-          ...msg,
-          timestamp: msg.timestamp || Date.now()
-        }));
-        setMessages(aiMessageWithTimestamp);
-        saveMessagesToSession(aiMessageWithTimestamp);
+      if (response.ok && response.body) {
+        // 初始化AI响应消息，添加"正在输入..."状态
+        const aiMessage: ChatMessage = {
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          isTyping: true
+        };
+        const tempMessages = [...updatedMessages, aiMessage];
+        setMessages(tempMessages);
+        
+        // 获取流式响应阅读器
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let partialData = '';
+        let finalChatHistory: ChatMessage[] = [];
+        
+        try {
+          // 读取流式响应
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            // 解码新数据
+            const chunk = decoder.decode(value, { stream: true });
+            partialData += chunk;
+            
+            // 处理SSE格式的数据
+            const lines = partialData.split('\n\n');
+            // 保存未处理完的行
+            partialData = lines.pop() || '';
+            
+            // 处理每一行完整的SSE消息
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const jsonStr = line.slice(6);
+                try {
+                  const data = JSON.parse(jsonStr);
+                  
+                  if (data.chunk) {
+                    // 更新AI消息内容
+                    tempMessages[tempMessages.length - 1].content += data.chunk;
+                    setMessages([...tempMessages]);
+                  }
+                  
+                  if (data.done) {
+                    // 流式传输结束，保存完整的聊天历史
+                    finalChatHistory = data.chat_history.map((msg: any) => ({
+                      ...msg,
+                      timestamp: msg.timestamp || Date.now(),
+                      isTyping: false // 确保移除正在输入状态
+                    }));
+                  }
+                } catch (e) {
+                  console.error('解析SSE数据失败:', e);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('流式响应处理失败:', error);
+          tempMessages[tempMessages.length - 1].content += '\n\n抱歉，流式响应处理失败，请稍后再试。';
+          setMessages([...tempMessages]);
+        } finally {
+          // 确保阅读器被释放
+          reader.releaseLock();
+        }
+        
+        // 保存最终的聊天历史
+        if (finalChatHistory.length > 0) {
+          setMessages(finalChatHistory);
+          saveMessagesToSession(finalChatHistory);
+        } else {
+          // 如果没有获取到最终的聊天历史，使用临时消息
+          saveMessagesToSession(tempMessages);
+        }
       } else {
         const errorMessage: ChatMessage = { 
           role: 'assistant', 
@@ -412,7 +566,8 @@ const ChatPage: React.FC = () => {
           backgroundColor: '#f0f2f5',
           borderRight: '1px solid #e8e8e8',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
+          minHeight: 0
         }}
       >
         {/* 会话列表头部 */}
@@ -476,16 +631,21 @@ const ChatPage: React.FC = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation(); // 防止触发会话切换
-                    deleteSession(session.id);
+                    showDeleteConfirm(session.id);
                   }}
                   style={{
-                    padding: '2px 6px',
+                    padding: '4px 8px',
                     borderRadius: '4px',
-                    backgroundColor: '#ff4d4f',
-                    color: 'white',
-                    border: 'none',
-                    fontSize: '10px',
-                    cursor: 'pointer'
+                    backgroundColor: 'transparent',
+                    color: '#8c8c8c',
+                    border: '1px solid #d9d9d9',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    width: '40px',
+                    textAlign: 'center',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
                   }}
                 >
                   删除
@@ -546,7 +706,6 @@ const ChatPage: React.FC = () => {
                 minWidth: '200px'
               }}
               onChange={(e) => {
-                // 保存用户选择的模型
                 localStorage.setItem('selectedAiModel', e.target.value);
               }}
               defaultValue={localStorage.getItem('selectedAiModel') || 'auto'}
@@ -564,123 +723,170 @@ const ChatPage: React.FC = () => {
           </div>
         </div>
         
-        {/* 聊天消息区域 */}
-        <div 
-          className="chat-messages" 
-          style={{ 
-            flex: 1, 
-            overflowY: 'auto', 
-            padding: '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            backgroundColor: '#ffffff'
-          }}
-        >
-          {messages.map((msg, index) => (
+        {/* 右侧聊天内容 - 固定输入区域在底部 */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {/* 聊天消息区域 - 外层容器，用于定位滚动按钮 */}
+          <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+            {/* 聊天消息区域 */}
             <div 
-              key={index}
-              style={{
-                alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '70%',
+              ref={messagesContainerRef}
+              className="chat-messages" 
+              style={{ 
+                height: '100%',
+                overflowY: 'auto', 
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+                backgroundColor: '#ffffff',
+                wordBreak: 'break-word'
               }}
+              onScroll={handleScroll}
             >
-              <div 
-                style={{
-                  padding: '12px 16px',
-                  borderRadius: '18px',
-                  backgroundColor: msg.role === 'user' ? '#1890ff' : '#f0f0f0',
-                  color: msg.role === 'user' ? 'white' : 'black',
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)'
-                }}
-              >
-                {msg.content}
-              </div>
-              {/* 显示工具调用过程 */}
-              {msg.tool_calls && msg.tool_calls.length > 0 && (
-                <div style={{ marginTop: '10px', width: '100%' }}>
-                  <ToolCallVisualization 
-                    steps={msg.tool_calls.map(call => ({
-                      thought: call.thought || '无思考过程',
-                      action: call.action || '未知工具',
-                      action_input: call.action_input || {},
-                      observation: call.observation || '无结果',
-                      status: 'success' // 默认成功，实际应根据返回结果设置
-                    }))} 
-                  />
-                </div>
-              )}
-              {/* 显示消息时间 */}
-              {msg.timestamp && (
+              {messages.map((msg, index) => (
                 <div 
+                  key={index}
                   style={{
-                    fontSize: '10px',
-                    color: '#8c8c8c',
-                    marginTop: '4px',
-                    textAlign: msg.role === 'user' ? 'right' : 'left'
+                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '70%',
                   }}
                 >
-                  {new Date(msg.timestamp).toLocaleTimeString('zh-CN', { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                  })}
+                  <div 
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: '18px',
+                      backgroundColor: msg.role === 'user' ? '#1890ff' : '#f0f0f0',
+                      color: msg.role === 'user' ? 'white' : 'black',
+                      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)'
+                    }}
+                  >
+                    {msg.content}
+                    {msg.isTyping && (
+                      <span style={{ 
+                        fontSize: '12px', 
+                        color: '#8c8c8c', 
+                        marginLeft: '5px',
+                        fontStyle: 'italic'
+                      }}>
+                        正在输入...
+                      </span>
+                    )}
+                  </div>
+                  {/* 显示工具调用过程 */}
+                  {msg.tool_calls && msg.tool_calls.length > 0 && (
+                    <div style={{ marginTop: '10px', width: '100%' }}>
+                      <ToolCallVisualization 
+                        steps={msg.tool_calls.map(call => ({
+                          thought: call.thought || '无思考过程',
+                          action: call.action || '未知工具',
+                          action_input: call.action_input || {},
+                          observation: call.observation || '无结果',
+                          status: 'success'
+                        }))} 
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
+              {/* 用于自动滚动到底部的占位元素 */}
+              <div ref={messagesEndRef} />
             </div>
-          ))}
-          {loading && (
-            <div style={{ alignSelf: 'flex-start', maxWidth: '70%' }}>
-              <div style={{ padding: '12px 16px', borderRadius: '18px', backgroundColor: '#f0f0f0', color: 'black', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)' }}>
-                正在思考中...
-              </div>
-            </div>
-          )}
-        </div>
-        
-        {/* 聊天输入区域 */}
-        <div className="chat-input" style={{ padding: '16px', borderTop: '1px solid #e8e8e8', backgroundColor: '#f0f2f5', display: 'flex', gap: '12px' }}>
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="输入消息..."
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              borderRadius: '24px',
-              border: '1px solid #d9d9d9',
-              fontSize: '14px',
-              outline: 'none',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)'
-            }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={loading}
-            style={{
-              padding: '12px 24px',
-              borderRadius: '24px',
-              backgroundColor: '#1890ff',
-              color: 'white',
-              border: 'none',
-              fontSize: '14px',
-              fontWeight: '500',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.6 : 1,
-              transition: 'all 0.3s',
-              boxShadow: '0 2px 8px rgba(24, 144, 255, 0.3)'
-            }}
-          >
-            {loading ? '发送中...' : '发送'}
-          </button>
+            
+            {/* 一键滚动到底部按钮 - 放置在消息容器的外层，固定在右下角 */}
+            {showScrollButton && (
+              <button
+                onClick={handleManualScrollToBottom}
+                style={{
+                  position: 'absolute',
+                  bottom: '24px',
+                  right: '24px',
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: '#1890ff',
+                  color: 'white',
+                  border: 'none',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  fontSize: '16px',
+                  transition: 'all 0.3s',
+                  opacity: 0.8,
+                  zIndex: 10,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = '1';
+                  e.currentTarget.style.transform = 'scale(1.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = '0.8';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+                title="滚动到最新消息"
+              >
+                ↓
+              </button>
+            )}
+          </div>
+          
+          {/* 聊天输入区域 - 固定在底部 */}
+          <div className="chat-input" style={{ padding: '16px', borderTop: '1px solid #e8e8e8', backgroundColor: '#f0f2f5', display: 'flex', gap: '12px' }}>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+              placeholder="输入消息..."
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                borderRadius: '24px',
+                border: '1px solid #d9d9d9',
+                fontSize: '14px',
+                outline: 'none',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)'
+              }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={loading}
+              style={{
+                padding: '12px 24px',
+                borderRadius: '24px',
+                backgroundColor: '#1890ff',
+                color: 'white',
+                border: 'none',
+                fontSize: '14px',
+                fontWeight: '500',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                opacity: loading ? 0.6 : 1,
+                transition: 'all 0.3s',
+                boxShadow: '0 2px 8px rgba(24, 144, 255, 0.3)'
+              }}
+            >
+              {loading ? '发送中...' : '发送'}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    
+    {/* 删除确认弹窗 */}
+    <Modal
+      title="确认删除"
+      open={isDeleteModalVisible}
+      onOk={handleDeleteConfirm}
+      onCancel={handleDeleteCancel}
+      okText="确认删除"
+      cancelText="取消"
+      centered
+    >
+      <p>确定要删除这个聊天会话吗？此操作不可恢复。</p>
+    </Modal>
+  </div>
+);
 };
-
-
 
 // 数据管理首页
 const DataManagementPage: React.FC = () => {

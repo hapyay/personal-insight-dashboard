@@ -11,14 +11,19 @@ const SkillTreePage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [zoom, setZoom] = useState<number>(1);
+  
+  // 用于跟踪是否已经执行过useEffect（解决React.StrictMode下useEffect执行两次的问题）
+  const hasLoadedRef = React.useRef(false);
 
   // 加载技能数据
-  const loadSkills = async () => {
+  const loadSkills = async (showSuccessMessage = false) => {
     setLoading(true);
     try {
       const data = await getSkills(0, 100, selectedCategory);
       setSkills(data);
-      message.success('技能数据加载成功');
+      if (showSuccessMessage) {
+        message.success('技能数据加载成功');
+      }
     } catch (error) {
       message.error('技能数据加载失败');
       console.error('Failed to load skills:', error);
@@ -28,7 +33,8 @@ const SkillTreePage: React.FC = () => {
   };
 
   useEffect(() => {
-    loadSkills();
+    // 组件挂载或类别变化时加载数据，不显示成功通知
+    loadSkills(false);
   }, [selectedCategory]);
 
   // 处理缩放
@@ -51,7 +57,7 @@ const SkillTreePage: React.FC = () => {
           <Space>
             <Button 
               icon={<ReloadOutlined />} 
-              onClick={loadSkills} 
+              onClick={() => loadSkills(true)} 
               loading={loading}
             >
               刷新数据

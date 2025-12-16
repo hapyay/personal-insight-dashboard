@@ -1,8 +1,9 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.ai.agent import handle_agent_request
+from app.ai.agent import handle_agent_request, process_streaming_request
 
 router = APIRouter()
 
@@ -46,6 +47,51 @@ async def chat_with_agent(request: AgentRequest):
         return AgentResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Agent处理失败: {str(e)}")
+
+# AI Agent 流式聊天端点 - 异步实现
+@router.post("/chat/stream")
+async def stream_chat_with_agent(request: AgentRequest):
+    """
+    与AI Agent进行流式聊天，支持工具调用和多轮对话
+    
+    Args:
+        input: 用户输入文本
+        chat_history: 聊天历史记录，格式为[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+        model: 可选，指定使用的AI模型类型，如：openai, deepseek, doubao
+        model_name: 可选，具体模型名称，如：gpt-3.5-turbo, deepseek-chat, doubao-pro-1-6
+        api_key: 可选，模型的API密钥
+    
+    Returns:
+        流式SSE响应，包含AI的实时回复
+    """
+    
+    # 异步生成器，产生SSE格式数据
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            # 调用流式处理函数
+            async for chunk in process_streaming_request(
+                input_text=request.input,
+                chat_history=request.chat_history,
+                model=request.model,
+                model_name=request.model_name,
+                api_key=request.api_key
+            ):
+                # 格式化为SSE格式
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            # 发送错误信息
+            yield f"data: {{\"error\": \"{str(e)}\", \"done\": true}}\n\n"
+    
+    # 返回流式响应
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
 
 # AI 工具列表端点
 @router.get("/tools")

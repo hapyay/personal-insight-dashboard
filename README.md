@@ -203,5 +203,4 @@ Apache-2.0 license
 如有问题或建议，请通过以下方式联系：
 
 - Email: 2655076437@qq.com
-- GitHub Issues: https://github.com/hapyay/personal-insight-dashboard/issues
-本次开发全程使用AI coding，我刚入门代码开发，如有问题欢迎指正。
+- 本次开发全程使用Ai辅助，我刚入门代码开发，如有问题欢迎指正。

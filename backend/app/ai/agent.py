@@ -1,6 +1,7 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 from datetime import datetime
 import os
+import json
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -159,6 +160,134 @@ async def process_full_agent_request(
         print(f"AI模型调用失败: {str(e)}")
         # 如果AI模型调用失败，回退到简化响应
         return process_simple_request(input_text, chat_history)
+
+# 流式处理函数
+async def process_streaming_request(
+    input_text: str, 
+    chat_history: List[Dict[str, Any]], 
+    model: Optional[str] = None, 
+    model_name: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> AsyncGenerator[str, None]:
+    """
+    使用完整的AI模型处理请求，返回流式响应
+    
+    Args:
+        input_text: 用户输入文本
+        chat_history: 聊天历史记录
+        model: 模型类型（openai, deepseek, doubao）
+        model_name: 具体模型名称
+        api_key: 模型的API密钥
+    
+    Yields:
+        流式响应的JSON字符串
+    """
+    try:
+        # 根据模型名称确定模型类型和配置
+        llm = None
+        
+        # 如果没有指定model_name，使用默认值
+        if not model_name:
+            model_name = "gpt-3.5-turbo"  # 默认使用OpenAI模型
+        
+        # 根据模型名称确定模型类型和配置
+        if model_name.startswith('gpt-'):
+            # OpenAI模型
+            llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                temperature=0.7,
+                streaming=True
+            )
+        elif model_name.startswith('deepseek-'):
+            # DeepSeek模型
+            llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url="https://api.deepseek.com/v1",
+                temperature=0.7,
+                streaming=True
+            )
+        elif model_name.startswith('doubao-'):
+            # 豆包模型
+            llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+                temperature=0.7,
+                streaming=True
+            )
+        else:
+            # 其他模型，尝试使用OpenAI兼容的API
+            llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                temperature=0.7,
+                streaming=True
+            )
+        
+        # 准备聊天历史消息
+        messages = []
+        for msg in chat_history:
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                messages.append(AIMessage(content=msg["content"]))
+        
+        # 添加当前用户输入
+        messages.append(HumanMessage(content=input_text))
+        
+        # 定义提示模板
+        prompt = ChatPromptTemplate.from_messages([
+            (
+                "system", 
+                "你是一个个人洞察助手，能够帮助用户管理和分析他们的情感、财务、技能和学习数据。" 
+                "请根据用户的请求提供友好、专业的回答。"
+            ),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        # 创建对话链
+        chain = (
+            {"messages": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+        
+        # 更新聊天历史（添加用户输入）
+        updated_history = chat_history.copy()
+        updated_history.append({"role": "user", "content": input_text})
+        
+        # 流式获取响应
+        full_response = ""
+        async for chunk in chain.astream(messages):
+            full_response += chunk
+            # 生成包含当前片段的JSON
+            yield json.dumps({
+                "chunk": chunk,
+                "done": False
+            })
+        
+        # 更新聊天历史（添加AI响应）
+        updated_history.append({"role": "assistant", "content": full_response})
+        
+        # 生成结束信号，包含完整的聊天历史
+        yield json.dumps({
+            "done": True,
+            "full_response": full_response,
+            "chat_history": updated_history
+        })
+    except Exception as e:
+        print(f"AI模型流式调用失败: {str(e)}")
+        # 如果AI模型调用失败，回退到简化响应
+        response = process_simple_request(input_text, chat_history)
+        yield json.dumps({
+            "chunk": response["response"],
+            "done": True,
+            "full_response": response["response"],
+            "chat_history": response["chat_history"]
+        })
 
 # 主处理函数
 async def handle_agent_request(
